@@ -1,2 +1,12 @@
 brain_tumor_dataset/
 model.keras
+# Python cache
+__pycache__/
+*.pyc
+
+# Virtual environment
+venv/
+
+# OS files
+.DS_Store
+Thumbs.db

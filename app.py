@@ -440,33 +440,71 @@ def load_trained_model() -> Optional[Model]:
     """
     try:
         import os
+        from tensorflow.keras import Sequential
+        from tensorflow.keras.layers import InputLayer, Flatten, Dense
         
-        if not os.path.exists(MODEL_PATH):
-            error_msg = f"Model file not found at {MODEL_PATH}"
-            st.error(error_msg)
-            logger.error(error_msg)
-            return None
-        
-        model = load_model(MODEL_PATH)
-        
-        # Validate model
-        validate_model(model)
-        
-        logger.info(f"Model loaded and validated successfully from {MODEL_PATH}")
-        return model
-    
-    except ValueError as e:
-        # Model validation error
-        error_msg = f"Model validation error: {str(e)}"
-        st.error(error_msg)
-        logger.error(error_msg)
-        return None
-    
+        # If model file exists, attempt to load and validate it
+        if os.path.exists(MODEL_PATH):
+            try:
+                model = load_model(MODEL_PATH)
+                validate_model(model)
+                logger.info(f"Model loaded and validated successfully from {MODEL_PATH}")
+                # Ensure demo flag is cleared
+                if "demo_mode" in st.session_state:
+                    st.session_state.demo_mode = False
+                return model
+            except Exception as e:
+                # If loading/validation fails, fall back to dummy model but log error
+                logger.error(f"Failed to load or validate model at {MODEL_PATH}: {e}")
+                st.warning(
+                    "Model found but failed to load/validate. Falling back to demo model."
+                )
+
+        # If we reached here, model file is missing or invalid -> build a lightweight dummy model
+        num_classes = len(CLASS_LABELS)
+        logger.info("Building lightweight demo model as fallback")
+
+        demo_model = Sequential([
+            InputLayer(input_shape=(IMAGE_SIZE, IMAGE_SIZE, MODEL_INPUT_SPECS.get("channels", 3))),
+            Flatten(),
+            Dense(64, activation="relu"),
+            Dense(num_classes, activation="softmax"),
+        ])
+
+        # Set a simple attribute so other code can detect demo mode
+        st.session_state.demo_mode = True
+        st.info(
+            "⚠️ Running in DEMO mode: using a lightweight fallback model. "
+            "Predictions are for demonstration only and not medical advice."
+        )
+
+        # Validate the demo model shape to keep downstream logic consistent
+        try:
+            validate_model(demo_model)
+        except Exception:
+            # In the unlikely event the demo model doesn't validate, log and continue
+            logger.error("Demo model failed validation checks, but will be used for demo predictions")
+
+        return demo_model
+
     except Exception as e:
-        error_msg = f"Failed to load model: {str(e)}"
-        st.error(error_msg)
-        logger.error(error_msg)
-        return None
+        # Last-resort: avoid raising and instead return a very small dummy object with predict
+        logger.error(f"Unexpected error while preparing model: {e}")
+
+        class VerySmallDummy:
+            output_shape = (None, len(CLASS_LABELS))
+
+            def predict(self, x, verbose=0):
+                batch = x.shape[0] if hasattr(x, "shape") else 1
+                r = np.random.rand(batch, len(CLASS_LABELS)).astype(np.float32)
+                r = r / r.sum(axis=1, keepdims=True)
+                return r
+
+        st.session_state.demo_mode = True
+        st.warning(
+            "⚠️ An unexpected error occurred while initializing models — running in demo fallback mode."
+        )
+        return VerySmallDummy()
 
 
 def preprocess_image(
@@ -674,6 +712,16 @@ def render_header() -> None:
     at the top of the main content area.
     """
     st.markdown("---")
+    # If running with the demo fallback model, show a prominent banner
+    try:
+        if getattr(st.session_state, "demo_mode", False):
+            st.warning(
+                "⚠️ The app is running in DEMO mode using a fallback model. "
+                "Predictions are for demonstration only and are NOT medical advice."
+            )
+    except Exception:
+        # session_state may not be initialized in some tests; ignore
+        pass
     col1, col2 = st.columns([1, 3])
     with col1:
         st.markdown("# 🧠 Brain Tumor Detection")
